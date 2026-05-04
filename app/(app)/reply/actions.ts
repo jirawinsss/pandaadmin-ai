@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -10,25 +12,64 @@ import {
   getStoreProducts,
 } from "@/lib/store";
 import { planLimits } from "@/lib/plans";
-import { buildStoreSystemPrompt } from "@/lib/ai-context";
+import { buildBulkReplySystemPrompt } from "@/lib/ai-context";
 import { getAnthropic, REPLY_MODEL } from "@/lib/anthropic";
+import {
+  INTENTS,
+  MAX_MESSAGES_PER_BATCH,
+  REPLY_GOALS,
+  splitCustomerMessages,
+  type BulkReplyItem,
+  type ReplyGoal,
+} from "./types";
 
-export type GenerateReplyResult =
-  | { ok: true; reply: string; usageRemaining: number }
-  | { ok: false; error: string };
+// Zod schema enforced by output_config.format
+const ReplyItemSchema = z.object({
+  customer_message: z.string(),
+  intent: z.enum(INTENTS),
+  sales_note: z.string(),
+  short_reply: z.string(),
+  polite_reply: z.string(),
+  closing_reply: z.string(),
+  risk_level: z.enum(["low", "medium", "high"]),
+  should_handoff: z.boolean(),
+});
+const BulkReplyResponseSchema = z.object({
+  items: z.array(ReplyItemSchema),
+});
 
-export async function generateReplyAction(
-  customerMsg: string,
-): Promise<GenerateReplyResult> {
+const VALID_GOALS = new Set<string>(REPLY_GOALS.map((g) => g.value));
+
+export type GenerateBulkResult =
+  | { ok: true; items: BulkReplyItem[]; usageRemaining: number }
+  | { ok: false; error: string; needsBrain?: boolean };
+
+export async function generateBulkRepliesAction(opts: {
+  rawInput: string;
+  goal: string;
+}): Promise<GenerateBulkResult> {
   const ctx = await getCurrentContext();
   if (!ctx) return { ok: false, error: "ยังไม่ได้เข้าสู่ระบบ" };
 
-  const message = customerMsg.trim();
-  if (!message) return { ok: false, error: "กรุณาพิมพ์ข้อความลูกค้า" };
-  if (message.length > 5000)
-    return { ok: false, error: "ข้อความยาวเกินไป (เกิน 5,000 ตัวอักษร)" };
+  const goal = opts.goal as ReplyGoal;
+  if (!VALID_GOALS.has(goal)) {
+    return { ok: false, error: "เป้าหมายการตอบไม่ถูกต้อง" };
+  }
+  const goalLabel =
+    REPLY_GOALS.find((g) => g.value === goal)?.label ?? "ตอบข้อมูล";
 
-  // Plan limit
+  const customers = splitCustomerMessages(opts.rawInput);
+  if (customers.length === 0) {
+    return { ok: false, error: "กรุณาวางข้อความลูกค้าอย่างน้อย 1 รายการ" };
+  }
+  if (customers.length > MAX_MESSAGES_PER_BATCH) {
+    return {
+      ok: false,
+      error: `ครั้งละไม่เกิน ${MAX_MESSAGES_PER_BATCH} รายการ — ลดจำนวนแล้วลองใหม่`,
+    };
+  }
+
+  // Plan limit — 1 batch = 1 reply usage
   const limits = planLimits(ctx.profile.plan);
   if (ctx.profile.usage_reply >= limits.reply) {
     return {
@@ -37,34 +78,57 @@ export async function generateReplyAction(
     };
   }
 
-  // Setup gate
+  // Setup gate — need name + at least some context
   if (!ctx.store.name?.trim()) {
     return {
       ok: false,
-      error: "กรุณาตั้งชื่อร้านและกรอกข้อมูลในหน้า 'ข้อมูลร้าน' ก่อน",
+      error:
+        "กรุณาตั้งชื่อร้านและกรอกข้อมูลใน 'ข้อมูลร้าน' ก่อน — AI ต้องรู้จักร้านคุณถึงจะตอบได้แม่น",
+      needsBrain: true,
     };
   }
 
-  // Build context
   const [products, faqs] = await Promise.all([
     getStoreProducts(ctx.store.id),
     getStoreFaqs(ctx.store.id),
   ]);
-  const systemPrompt = buildStoreSystemPrompt({
+
+  if (products.length === 0 && faqs.length === 0) {
+    return {
+      ok: false,
+      error:
+        "ยังไม่มีสินค้าหรือ FAQ ในร้าน — เพิ่มอย่างน้อย 1 อย่างใน 'ข้อมูลร้าน' ก่อน เพื่อให้ AI ตอบได้แม่น",
+      needsBrain: true,
+    };
+  }
+
+  const systemPrompt = buildBulkReplySystemPrompt({
     store: ctx.store,
     products,
     faqs,
+    goal,
+    goalLabel,
   });
 
-  // Call Claude
-  let aiReply = "";
+  const userMessage =
+    `ข้อความลูกค้า ${customers.length} ราย — เป้าหมายการตอบ: ${goalLabel}\n\n` +
+    customers
+      .map((m, i) => `ลูกค้า #${i + 1}: ${m}`)
+      .join("\n\n") +
+    `\n\nวิเคราะห์ทีละราย ส่งกลับเป็น items[] ตามลำดับเดิม`;
+
+  // Call Claude with structured output
+  let items: BulkReplyItem[];
   try {
     const anthropic = getAnthropic();
-    const response = await anthropic.messages.create({
+    const response = await anthropic.messages.parse({
       model: REPLY_MODEL,
-      max_tokens: 1024,
+      max_tokens: 4096,
       thinking: { type: "disabled" },
-      output_config: { effort: "low" },
+      output_config: {
+        format: zodOutputFormat(BulkReplyResponseSchema),
+        effort: "low",
+      },
       system: [
         {
           type: "text",
@@ -72,24 +136,27 @@ export async function generateReplyAction(
           cache_control: { type: "ephemeral" },
         },
       ],
-      messages: [{ role: "user", content: message }],
+      messages: [{ role: "user", content: userMessage }],
     });
 
-    for (const block of response.content) {
-      if (block.type === "text") aiReply += block.text;
+    if (!response.parsed_output) {
+      console.error("[bulk-reply] no parsed_output", response);
+      return { ok: false, error: "AI ส่งโครงสร้างผิด ลองใหม่อีกครั้ง" };
     }
-    aiReply = aiReply.trim();
-
-    if (!aiReply) {
+    items = response.parsed_output.items;
+    if (items.length === 0) {
       return { ok: false, error: "AI ไม่ได้สร้างคำตอบ ลองใหม่อีกครั้ง" };
     }
   } catch (err) {
-    console.error("[reply] anthropic error:", err);
+    console.error("[bulk-reply] anthropic error:", err);
     if (err instanceof Anthropic.RateLimitError) {
       return { ok: false, error: "ระบบ AI กำลังโดนใช้หนัก ลองใหม่อีก 1 นาที" };
     }
     if (err instanceof Anthropic.AuthenticationError) {
-      return { ok: false, error: "ANTHROPIC_API_KEY ไม่ถูกต้อง — ตรวจสอบ .env.local" };
+      return {
+        ok: false,
+        error: "ANTHROPIC_API_KEY ไม่ถูกต้อง — ตรวจสอบ .env.local",
+      };
     }
     if (err instanceof Anthropic.APIError) {
       return {
@@ -100,17 +167,33 @@ export async function generateReplyAction(
     return { ok: false, error: "เรียก AI ไม่สำเร็จ — กรุณาลองใหม่" };
   }
 
-  // Save to history + increment usage
-  const supabase = await createClient();
+  // Save batch to history (combined readable text — uses existing schema)
+  const combinedCustomerMsg =
+    `[${customers.length} รายการ — เป้าหมาย: ${goalLabel}]\n` +
+    customers.map((m, i) => `${i + 1}. ${m}`).join("\n");
 
+  const combinedAiReply = items
+    .map((it, i) => {
+      const handoff = it.should_handoff ? " [แอดมินตรวจสอบ]" : "";
+      return [
+        `--- ลูกค้า ${i + 1} (${it.intent}, ${it.risk_level}${handoff}) ---`,
+        `📝 ${it.sales_note}`,
+        `[สั้น] ${it.short_reply}`,
+        `[สุภาพ] ${it.polite_reply}`,
+        `[ปิดการขาย] ${it.closing_reply}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const supabase = await createClient();
   const { error: insertErr } = await supabase.from("reply_history").insert({
     store_id: ctx.store.id,
-    customer_msg: message,
-    ai_reply: aiReply,
+    customer_msg: combinedCustomerMsg,
+    ai_reply: combinedAiReply,
   });
   if (insertErr) {
-    console.error("[reply] insert error:", insertErr);
-    return { ok: false, error: "บันทึกประวัติไม่สำเร็จ" };
+    console.error("[bulk-reply] insert error:", insertErr);
+    // Don't hard-fail — replies are useful even if history save flopped
   }
 
   const newUsage = ctx.profile.usage_reply + 1;
@@ -119,8 +202,7 @@ export async function generateReplyAction(
     .update({ usage_reply: newUsage })
     .eq("id", ctx.user.id);
   if (updErr) {
-    // Reply is already saved — log but don't fail user-facing
-    console.error("[reply] usage_reply update error:", updErr);
+    console.error("[bulk-reply] usage_reply update error:", updErr);
   }
 
   revalidatePath("/reply");
@@ -128,7 +210,7 @@ export async function generateReplyAction(
 
   return {
     ok: true,
-    reply: aiReply,
+    items,
     usageRemaining: Math.max(0, limits.reply - newUsage),
   };
 }

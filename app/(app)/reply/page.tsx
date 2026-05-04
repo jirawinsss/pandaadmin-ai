@@ -35,11 +35,11 @@ export default async function ReplyPage() {
       <div className="flex flex-col gap-1">
         <p className="text-sm text-muted-foreground">
           เหลือ <span className="font-medium text-foreground">{remaining}</span>{" "}
-          จาก {limits.reply} ครั้ง / เดือน
+          จาก {limits.reply} ครั้ง / เดือน · 1 batch = นับ 1 ครั้ง
         </p>
-        <h1 className="font-heading text-2xl font-semibold">ตอบแชต</h1>
+        <h1 className="font-heading text-2xl font-semibold">ตอบแชต — โหมดขาย</h1>
         <p className="text-sm text-muted-foreground">
-          วางข้อความที่ลูกค้าส่งมา → AI จะร่างคำตอบในน้ำเสียงร้านของคุณ
+          วางข้อความลูกค้าได้ครั้งละหลายราย → AI วิเคราะห์เจตนา + ร่างคำตอบ 3 แบบ (สั้น / สุภาพ / ปิดการขาย)
         </p>
       </div>
 
