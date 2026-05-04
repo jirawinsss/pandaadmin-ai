@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PandaAdmin AI — ผู้ช่วย AI สำหรับแม่ค้าออนไลน์",
+  title: "แม่ค้า AI — ผู้ช่วยอัจฉริยะสำหรับแม่ค้าออนไลน์",
   description:
     "AI ที่จำข้อมูลร้านได้ ช่วยตอบแชตและสร้างโพสต์ขายของในน้ำเสียงของร้านคุณ",
 };

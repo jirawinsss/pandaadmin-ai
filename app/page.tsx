@@ -7,11 +7,11 @@ export default function Home() {
       <div className="flex w-full max-w-2xl flex-col items-center gap-8 text-center">
         <div className="flex flex-col gap-3">
           <h1 className="font-heading text-4xl font-semibold tracking-tight sm:text-5xl">
-            PandaAdmin AI
+            แม่ค้า AI
           </h1>
           <p className="text-lg text-muted-foreground">
-            ผู้ช่วย AI สำหรับแม่ค้าออนไลน์ —
-            จำข้อมูลร้านคุณ ช่วยตอบแชตและสร้างโพสต์ขายของในน้ำเสียงของคุณเอง
+            ผู้ช่วยอัจฉริยะสำหรับแม่ค้าออนไลน์ —
+            จำข้อมูลร้านคุณ ตอบแชตเก่ง ทำโพสต์ขายดี ในน้ำเสียงของคุณเอง
           </p>
         </div>
 
