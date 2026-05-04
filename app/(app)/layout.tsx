@@ -31,6 +31,12 @@ export default async function AppLayout({
             <Button asChild variant="ghost" size="sm">
               <Link href="/brain">ข้อมูลร้าน</Link>
             </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/reply">ตอบแชต</Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/post">สร้างโพสต์</Link>
+            </Button>
             <form action={logoutAction}>
               <Button type="submit" variant="ghost" size="sm">
                 ออกจากระบบ
