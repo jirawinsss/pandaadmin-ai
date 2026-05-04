@@ -8,9 +8,11 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/inbox", label: "Inbox" },
   { href: "/brain", label: "ข้อมูลร้าน" },
   { href: "/reply", label: "ตอบแชต" },
   { href: "/post", label: "สร้างโพสต์" },
+  { href: "/integrations/line", label: "เชื่อมต่อ LINE" },
   { href: "/settings", label: "ตั้งค่า" },
 ];
 

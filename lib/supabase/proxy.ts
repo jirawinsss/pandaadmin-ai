@@ -1,7 +1,16 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/brain", "/reply", "/post"];
+const PROTECTED_PREFIXES = [
+  "/dashboard",
+  "/brain",
+  "/reply",
+  "/post",
+  "/inbox",
+  "/integrations",
+  "/settings",
+  "/admin",
+];
 const AUTH_PREFIXES = ["/login", "/register"];
 
 function startsWithAny(path: string, prefixes: string[]) {

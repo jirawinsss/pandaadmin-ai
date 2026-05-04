@@ -213,6 +213,51 @@ export function buildBulkReplySystemPrompt(opts: {
 }
 
 /**
+ * System prompt for the LINE inbox draft generator.
+ * Single customer message in -> single AI draft out (plus intent / risk /
+ * should_handoff). Reuses the store block as cache prefix.
+ */
+export function buildInboxDraftSystemPrompt(opts: {
+  store: StoreRow;
+  products: ProductRow[];
+  faqs: FaqRow[];
+}): string {
+  const storeBlock = buildStoreSystemPrompt(opts);
+  const lines: string[] = [storeBlock];
+
+  lines.push("");
+  lines.push("# งานในรอบนี้");
+  lines.push(
+    "ลูกค้าทักร้านผ่าน LINE OA หนึ่งข้อความ ให้คุณร่างคำตอบให้แม่ค้าใช้",
+  );
+
+  lines.push("");
+  lines.push("# กฎการตอบ");
+  lines.push("- ตอบเป็นภาษาไทย ใช้น้ำเสียงตามที่ร้านระบุ");
+  lines.push("- 1-3 ประโยค กระชับ เหมาะกับ chat บน LINE");
+  lines.push("- ห้ามแต่งราคา ส่วนลด หรือนโยบายที่ไม่มีในบริบท");
+  lines.push("- ถ้าไม่รู้คำตอบ ให้บอกว่าจะตรวจสอบและกลับมาตอบ ห้ามเดา");
+  lines.push(
+    "- ห้ามขึ้นต้นว่า 'นี่คือคำตอบ:' ตอบเป็นข้อความที่ส่งให้ลูกค้าได้ทันที",
+  );
+
+  lines.push("");
+  lines.push("# คำอธิบายแต่ละ field");
+  lines.push("- ai_draft: ข้อความที่จะส่งให้ลูกค้า (1-3 ประโยค)");
+  lines.push(
+    "- intent: เลือก 1 อย่าง — ถามราคา / ขอโปร / ลังเล / พร้อมซื้อ / ขอวิธีใช้ / เปรียบเทียบ / กังวลความน่าเชื่อถือ / อื่นๆ",
+  );
+  lines.push(
+    "- risk_level: high สำหรับเคลม คืนเงิน คำด่า โอนผิด ปัญหาสุขภาพ/กฎหมาย; medium สำหรับเรื่องเซนซิทีฟ; low สำหรับคำถามทั่วไป",
+  );
+  lines.push(
+    "- should_handoff: true ถ้าเป็นเรื่องเสี่ยงที่ AI ไม่ควรตอบเอง (risk=high หรือเรื่องที่แม่ค้าควรตัดสินใจเอง)",
+  );
+
+  return lines.join("\n");
+}
+
+/**
  * System prompt for generating a selling post about a specific product.
  * Reuses the store identity / voice / policies block from the reply prompt
  * so its prefix matches and prompt caching can hit across both flows.
