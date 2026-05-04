@@ -36,5 +36,5 @@ export async function registerAction(
   }
 
   revalidatePath("/", "layout");
-  redirect("/dashboard");
+  redirect("/brain?welcome=1");
 }

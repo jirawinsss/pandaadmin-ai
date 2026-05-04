@@ -1,13 +1,28 @@
 import { redirect } from "next/navigation";
+import { Sparkles } from "lucide-react";
 import {
   getCurrentContext,
   getStoreFaqs,
   getStoreProducts,
 } from "@/lib/store";
 import { planLimits, planLabel } from "@/lib/plans";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { BrainForm } from "./brain-form";
 
-export default async function BrainPage() {
+export default async function BrainPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ welcome?: string }>;
+}) {
+  const { welcome } = await searchParams;
+  const isWelcome = welcome === "1";
+
   const ctx = await getCurrentContext();
   if (!ctx) redirect("/login");
 
@@ -46,6 +61,28 @@ export default async function BrainPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {isWelcome && (
+        <Card className="border-primary bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="size-5 text-primary" />
+              ยินดีต้อนรับสู่แม่ค้า AI! 🎉
+            </CardTitle>
+            <CardDescription>
+              ขั้นแรก กรอกข้อมูลร้านให้ AI รู้จัก ใช้เวลา 5-10 นาที
+              ยิ่งละเอียด AI ยิ่งช่วยตอบลูกค้าและทำโพสต์ในแบบของคุณได้แม่น
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="ml-4 list-decimal flex-col gap-1 text-sm">
+              <li><strong>ตั้งชื่อร้าน + คำอธิบาย</strong> ที่จำเป็นที่สุด</li>
+              <li><strong>วาง 2-3 ประโยค</strong> ที่คุณเคยตอบลูกค้าจริง — ใช้สอน AI เลียนแบบสไตล์</li>
+              <li><strong>เพิ่มสินค้า 1-3 ชิ้น</strong> พร้อมรายละเอียด — เพิ่มเพิ่มทีหลังได้</li>
+            </ol>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex flex-col gap-1">
         <p className="text-sm text-muted-foreground">
           แพ็กเกจ {planLabel(ctx.profile.plan)} — สินค้าได้สูงสุด{" "}
