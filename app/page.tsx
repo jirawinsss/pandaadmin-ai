@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PLAN_LIMITS } from "@/lib/plans";
+import { TryDemo } from "./_components/try-demo";
 
 const PRICING = [
   {
@@ -265,6 +266,27 @@ export default async function Home() {
               title="โพสต์ขายของไม่หมดมุก"
               body="เลือกสินค้า + ประเภท (แนะนำ / โปร / เน้นจุดเด่น / กระตุ้นซื้อ) → ได้ caption พร้อมโพสต์"
             />
+          </div>
+        </div>
+      </section>
+
+      {/* Try demo */}
+      <section className="relative overflow-hidden border-b">
+        <div className="absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background" />
+        <div className="mx-auto w-full max-w-5xl px-6 py-20 sm:py-24">
+          <div className="text-center">
+            <p className="text-sm font-medium uppercase tracking-wider text-primary">
+              ลองเอง
+            </p>
+            <h2 className="mt-2 font-heading text-3xl font-semibold sm:text-4xl">
+              ลองให้ AI ตอบลูกค้าให้ดูเลย
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              ไม่ต้องสมัคร — ลอง 2 ครั้งก่อนตัดสินใจ
+            </p>
+          </div>
+          <div className="mt-12">
+            <TryDemo isLoggedIn={isLoggedIn} />
           </div>
         </div>
       </section>
