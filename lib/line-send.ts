@@ -13,6 +13,11 @@ export async function lineReplyText(opts: {
   if (!opts.replyToken) return { ok: false, error: "missing replyToken" };
   if (!opts.text.trim()) return { ok: false, error: "empty text" };
 
+  // 5s hard timeout via AbortSignal — a wedged TCP connection to LINE
+  // would otherwise hold the queue slot for the SDK default (~minutes)
+  // and starve the next AI job.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5_000);
   try {
     const res = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
@@ -24,6 +29,7 @@ export async function lineReplyText(opts: {
         replyToken: opts.replyToken,
         messages: [{ type: "text", text: opts.text }],
       }),
+      signal: ctrl.signal,
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -34,9 +40,14 @@ export async function lineReplyText(opts: {
     }
     return { ok: true };
   } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      return { ok: false, error: "LINE reply timed out after 5s" };
+    }
     return {
       ok: false,
       error: e instanceof Error ? e.message : String(e),
     };
+  } finally {
+    clearTimeout(timer);
   }
 }

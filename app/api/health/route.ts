@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getQueueStats } from "@/lib/ai-queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,11 @@ export const dynamic = "force-dynamic";
  *
  * Excluded from the proxy matcher (path starts with /api/) so it never
  * hits Supabase auth either.
+ *
+ * ai_queue.active / .backlog tells you whether the LINE webhook is
+ * currently saturated with AI work. If backlog ≥ max_backlog, new
+ * webhooks fall back to draft mode (no auto-send) to avoid worker
+ * starvation.
  */
 export async function GET() {
   return NextResponse.json({
@@ -27,5 +33,6 @@ export async function GET() {
       supabase_anon: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
       supabase_service: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
+    ai_queue: getQueueStats(),
   });
 }

@@ -17,7 +17,7 @@ export function getAnthropic(): Anthropic {
       );
     }
     cached = new Anthropic({
-      timeout: 25_000,
+      timeout: 20_000,
       maxRetries: 1,
     });
   }

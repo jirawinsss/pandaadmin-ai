@@ -9,6 +9,7 @@ import {
 import { lineReplyText } from "@/lib/line-send";
 import { consumeBucket, getClientIp } from "@/lib/ratelimit";
 import { withTimeout } from "@/lib/timeout";
+import { enqueueAiJob } from "@/lib/ai-queue";
 
 // Force Node runtime — we use crypto + the Anthropic SDK
 export const runtime = "nodejs";
@@ -256,14 +257,49 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // 6. Fire-and-forget AI work — DO NOT await this Promise. The handler
-  // returns immediately so Phusion Passenger releases the worker; the
-  // Promise continues running on Node's event loop until it resolves.
+  // 6. Enqueue AI work into the bounded-concurrency queue.
+  //    enqueueAiJob is synchronous — never awaits — so this loop adds
+  //    jobs and falls through to the 200 response in a few microseconds.
+  //    Concurrency is capped (default 2 jobs / process) so a burst of
+  //    webhooks can't fan out into 50+ parallel AI calls and exhaust the
+  //    Hostinger process pool.
   if (pendingDrafts.length > 0) {
     const integration = matched;
-    void runBackgroundDrafts(integration, pendingDrafts, reqId).catch((e) => {
-      console.error(`[line] [ai:bg-throw] req=${reqId}`, e);
-    });
+    const admin = createAdminClient();
+    for (const draft of pendingDrafts) {
+      const r = enqueueAiJob(() =>
+        processOnePending(admin, integration, draft, reqId),
+      );
+      if (r.ok) {
+        console.log(
+          `[line] [queue:ok] req=${reqId} row=${draft.rowId} active=${r.active} backlog=${r.backlog} queued=${r.queued}`,
+        );
+      } else {
+        console.warn(
+          `[line] [queue:dropped] req=${reqId} row=${draft.rowId} reason=${r.reason} active=${r.active} backlog=${r.backlog}`,
+        );
+        // Mark the row so the merchant sees that AI didn't draft this
+        // one and they need to reply manually. Fire-and-forget — do NOT
+        // await, otherwise we'd push the DB call back into the critical
+        // path under exactly the load condition we're trying to relieve.
+        void admin
+          .from("inbox_messages")
+          .update({
+            status: "needs_human",
+            send_error:
+              "AI queue overloaded — manual reply needed (auto-reply skipped under load)",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", draft.rowId)
+          .then(({ error }) => {
+            if (error) {
+              console.error(
+                `[line] [db:overload-update-fail] req=${reqId} row=${draft.rowId} error=${error.message}`,
+              );
+            }
+          });
+      }
+    }
   }
 
   console.log(
@@ -277,29 +313,6 @@ function isProcessableTextEvent(event: LineEvent): boolean {
   if (event.message?.type !== "text") return false;
   if (!event.message.text?.trim()) return false;
   return true;
-}
-
-/**
- * Background AI work — runs after the webhook has already returned 200.
- * Sequential within a single webhook batch (rare for LINE to send >1 event
- * per delivery); concurrent webhooks run their backgrounds in parallel.
- * Every operation is wrapped in try/catch so a single bad row never breaks
- * the others, and an unhandled error here can never crash the process or
- * affect future webhook responses.
- */
-async function runBackgroundDrafts(
-  integration: LineIntegrationRow,
-  drafts: PendingDraft[],
-  reqId: string,
-) {
-  const admin = createAdminClient();
-  for (const d of drafts) {
-    try {
-      await processOnePending(admin, integration, d, reqId);
-    } catch (e) {
-      console.error(`[line] [ai:row-throw] req=${reqId} row=${d.rowId}`, e);
-    }
-  }
 }
 
 async function processOnePending(
