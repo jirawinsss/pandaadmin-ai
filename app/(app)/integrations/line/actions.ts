@@ -3,10 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentContext } from "@/lib/store";
+import { INTENTS } from "@/app/(app)/reply/types";
 
 export type LineConfigResult = { ok: true } | { ok: false; error: string };
 
 const VALID_MODES = new Set(["draft", "auto_safe", "off"]);
+const VALID_INTENTS = new Set<string>(INTENTS);
 
 /**
  * Save LINE OA credentials and toggles for the current user's store.
@@ -27,9 +29,17 @@ export async function saveLineIntegrationAction(
   if (!VALID_MODES.has(mode)) {
     return { ok: false, error: "โหมดไม่ถูกต้อง" };
   }
-  // We currently only support 'draft' and 'off' — auto_safe is coming soon.
-  // Silently downgrade auto_safe to draft for safety.
-  const safeMode = mode === "auto_safe" ? "draft" : mode;
+
+  // Intent whitelist for auto_safe — multi-checkbox.
+  // formData.getAll returns FormDataEntryValue[]; filter to known intents.
+  const rawIntents = formData.getAll("auto_reply_intents").map(String);
+  const intents = Array.from(
+    new Set(rawIntents.filter((v) => VALID_INTENTS.has(v))),
+  );
+
+  // If not in auto_safe mode, persist an empty whitelist so toggling back
+  // doesn't surprise-enable old picks.
+  const finalIntents = mode === "auto_safe" ? intents : [];
 
   const supabase = await createClient();
 
@@ -57,7 +67,8 @@ export async function saveLineIntegrationAction(
         channel_access_token: finalToken,
         channel_secret: finalSecret,
         is_enabled: isEnabled,
-        auto_reply_mode: safeMode,
+        auto_reply_mode: mode,
+        auto_reply_intents: finalIntents,
         updated_at: new Date().toISOString(),
       })
       .eq("id", existing.id);
@@ -68,7 +79,8 @@ export async function saveLineIntegrationAction(
       channel_access_token: finalToken,
       channel_secret: finalSecret,
       is_enabled: isEnabled,
-      auto_reply_mode: safeMode,
+      auto_reply_mode: mode,
+      auto_reply_intents: finalIntents,
     });
     if (error) return { ok: false, error: `บันทึกไม่สำเร็จ: ${error.message}` };
   }

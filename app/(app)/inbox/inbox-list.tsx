@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import {
   AlertTriangle,
+  Bot,
   Check,
   Copy,
   EyeOff,
@@ -30,6 +31,8 @@ export type InboxRow = {
   intent: string | null;
   risk_level: "low" | "medium" | "high";
   status: string;
+  auto_sent: boolean;
+  send_error: string | null;
   created_at: string;
 };
 
@@ -145,6 +148,12 @@ function InboxCard({ row }: { row: InboxRow }) {
           >
             {STATUS_LABEL[status] ?? status}
           </span>
+          {row.auto_sent && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
+              <Bot className="size-3" />
+              AI ตอบให้
+            </span>
+          )}
           <span className="ml-auto text-muted-foreground">
             {formatTime(row.created_at)}
           </span>
@@ -167,6 +176,20 @@ function InboxCard({ row }: { row: InboxRow }) {
               </p>
               <p className="text-xs text-muted-foreground">
                 ข้อความนี้อาจเซนซิทีฟ — อย่าใช้ draft ส่งทันที
+              </p>
+            </div>
+          </div>
+        )}
+
+        {row.send_error && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">
+                ส่งอัตโนมัติไม่สำเร็จ
+              </p>
+              <p className="text-xs text-muted-foreground break-words">
+                {row.send_error}
               </p>
             </div>
           </div>

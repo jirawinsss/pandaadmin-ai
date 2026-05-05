@@ -64,8 +64,8 @@ export default async function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="outline" disabled className="w-full">
-              เปิดเร็วๆ นี้
+            <Button asChild variant="outline" className="w-full">
+              <Link href="/reply">เปิดโหมดขาย</Link>
             </Button>
           </CardContent>
         </Card>
@@ -79,8 +79,8 @@ export default async function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="outline" disabled className="w-full">
-              เปิดเร็วๆ นี้
+            <Button asChild variant="outline" className="w-full">
+              <Link href="/post">สร้างโพสต์</Link>
             </Button>
           </CardContent>
         </Card>

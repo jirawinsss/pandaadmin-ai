@@ -20,7 +20,9 @@ export default async function LineIntegrationPage() {
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("line_integrations")
-    .select("channel_access_token, channel_secret, is_enabled, auto_reply_mode, updated_at")
+    .select(
+      "channel_access_token, channel_secret, is_enabled, auto_reply_mode, auto_reply_intents, updated_at",
+    )
     .eq("store_id", ctx.store.id)
     .maybeSingle();
 
@@ -29,6 +31,7 @@ export default async function LineIntegrationPage() {
     secretMasked: maskSecret(existing?.channel_secret as string | null),
     isEnabled: Boolean(existing?.is_enabled),
     mode: (existing?.auto_reply_mode as string | null) ?? "draft",
+    intents: ((existing?.auto_reply_intents as string[] | null) ?? []),
     hasExisting: Boolean(existing),
   };
 
@@ -38,8 +41,8 @@ export default async function LineIntegrationPage() {
         <p className="text-sm text-muted-foreground">เชื่อมต่อช่องทางลูกค้า</p>
         <h1 className="font-heading text-2xl font-semibold">LINE OA</h1>
         <p className="text-sm text-muted-foreground">
-          ลูกค้าทักผ่าน LINE OA → AI ร่างคำตอบให้ใน Inbox → คุณกดคัดลอกแล้วส่งเอง
-          (โหมดปลอดภัย ไม่ส่งอัตโนมัติ)
+          ลูกค้าทักผ่าน LINE OA → AI ร่างคำตอบให้ใน Inbox —
+          เลือกได้ว่าจะให้ AI ตอบเองอัตโนมัติหรือคัดลอกส่งเอง
         </p>
       </div>
 

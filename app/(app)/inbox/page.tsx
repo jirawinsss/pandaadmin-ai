@@ -48,7 +48,7 @@ export default async function InboxPage({
   let query = supabase
     .from("inbox_messages")
     .select(
-      "id, platform, customer_name, external_user_id, message_text, ai_draft, intent, risk_level, status, created_at",
+      "id, platform, customer_name, external_user_id, message_text, ai_draft, intent, risk_level, status, auto_sent, send_error, created_at",
     )
     .eq("store_id", ctx.store.id)
     .order("created_at", { ascending: false })
@@ -69,6 +69,8 @@ export default async function InboxPage({
     intent: (r.intent as string | null) ?? null,
     risk_level: (r.risk_level as "low" | "medium" | "high") ?? "low",
     status: (r.status as string) ?? "draft",
+    auto_sent: Boolean(r.auto_sent),
+    send_error: (r.send_error as string | null) ?? null,
     created_at: (r.created_at as string) ?? "",
   }));
 
@@ -93,8 +95,8 @@ export default async function InboxPage({
         <p className="text-sm text-muted-foreground">ข้อความเข้าจาก LINE OA</p>
         <h1 className="font-heading text-2xl font-semibold">Inbox</h1>
         <p className="text-sm text-muted-foreground">
-          AI ร่างคำตอบให้แล้วใน mode draft — กดคัดลอกแล้วส่งใน LINE OA
-          ของคุณเอง
+          AI ร่างคำตอบให้ทุกข้อความ — โหมด auto-safe จะส่งให้เองตาม intent ที่เลือก
+          ส่วน draft ให้คัดลอกส่งเอง
         </p>
       </div>
 
