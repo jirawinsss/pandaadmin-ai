@@ -182,26 +182,58 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // 5. Batch persist — single UPSERT for all events. Idempotent via the
-  // unique constraint, so a LINE retry for the same event becomes a no-op
-  // and won't appear in `data` (because of ignoreDuplicates: true).
-  let pendingDrafts: PendingDraft[] = [];
-  try {
-    const admin = createAdminClient();
-    const insertRows = textEvents.map((event) => ({
-      store_id: matched!.store_id,
-      platform: "line",
-      external_user_id: event.source?.userId ?? null,
-      external_message_id: event.message?.id ?? null,
-      message_text: event.message!.text!.trim(),
-      // ai_draft, intent, risk_level filled in by the background task
-      ai_draft: null,
-      intent: null,
-      risk_level: "low",
-      status: "draft",
-      raw_event: event,
-    }));
+  // 5. Detach EVERYTHING after this point — UPSERT, AI enqueue, status
+  //    updates. The webhook handler returns 200 in <30ms regardless.
+  //    Worker is freed immediately; the background promise runs on the
+  //    Node event loop.
+  //
+  //    Trade-off: if the process is killed between the response and the
+  //    upsert (very narrow window), those events are lost. We accept this
+  //    over keeping LSAPI workers stuck waiting on Supabase RTTs under a
+  //    burst — a wedged worker pool blocks ALL routes (not just this one)
+  //    and is far more visible than an occasional missed message.
+  const integration = matched;
+  void persistAndDispatch(integration, textEvents, reqId).catch((e) => {
+    console.error(`[line] [bg:throw] req=${reqId}`, e);
+  });
 
+  console.log(
+    `[line] [done] req=${reqId} ms=${Date.now() - startedAt} events=${textEvents.length} (persist+ai detached)`,
+  );
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Off-the-critical-path background work for a webhook batch.
+ * Runs after the response is already sent. Errors here are logged but
+ * never affect the webhook response. Each step has its own try/catch so
+ * a partial failure (e.g., upsert OK but enqueue fails) doesn't silently
+ * lose the rest of the batch.
+ */
+async function persistAndDispatch(
+  integration: LineIntegrationRow,
+  events: LineEvent[],
+  reqId: string,
+) {
+  const admin = createAdminClient();
+
+  const insertRows = events.map((event) => ({
+    store_id: integration.store_id,
+    platform: "line",
+    external_user_id: event.source?.userId ?? null,
+    external_message_id: event.message?.id ?? null,
+    message_text: event.message!.text!.trim(),
+    ai_draft: null,
+    intent: null,
+    risk_level: "low",
+    status: "draft",
+    raw_event: event,
+  }));
+
+  // Idempotent batch UPSERT — LINE retries become no-ops via the unique
+  // constraint, ignoreDuplicates skips them in `data`.
+  let inserted: Array<{ id: string; external_message_id: string | null }>;
+  try {
     const { data, error } = await withTimeout(
       admin
         .from("inbox_messages")
@@ -213,100 +245,84 @@ export async function POST(req: NextRequest) {
       5_000,
       "inbox_messages upsert",
     );
-
     if (error) {
       console.error(
-        `[line] [db:upsert-fail] req=${reqId} error=${error.message}`,
+        `[line] [bg:upsert-fail] req=${reqId} error=${error.message}`,
       );
-      return NextResponse.json({ ok: true });
+      return;
     }
-
-    // Map inserted rows back to the original events so we can carry the
-    // replyToken and userId into the background task. Anything missing
-    // from `data` is a duplicate (LINE retry) — skip it.
-    const insertedById = new Map<string, string>();
-    for (const r of (data ?? []) as Array<{
+    inserted = (data ?? []) as Array<{
       id: string;
       external_message_id: string | null;
-    }>) {
-      if (r.external_message_id) {
-        insertedById.set(r.external_message_id, r.id);
-      }
-    }
-
-    pendingDrafts = textEvents
-      .map((event): PendingDraft | null => {
-        const extId = event.message?.id;
-        if (!extId) return null;
-        const rowId = insertedById.get(extId);
-        if (!rowId) return null;
-        return {
-          rowId,
-          storeId: matched!.store_id,
-          externalUserId: event.source?.userId ?? null,
-          messageText: event.message!.text!.trim(),
-          replyToken: event.replyToken,
-        };
-      })
-      .filter((p): p is PendingDraft => p !== null);
-
-    console.log(
-      `[line] [db:upsert-ok] req=${reqId} inserted=${pendingDrafts.length} duplicate=${textEvents.length - pendingDrafts.length}`,
-    );
+    }>;
   } catch (e) {
-    console.error(`[line] [db:upsert-throw] req=${reqId}`, e);
-    return NextResponse.json({ ok: true });
+    console.error(`[line] [bg:upsert-throw] req=${reqId}`, e);
+    return;
   }
 
-  // 6. Enqueue AI work into the bounded-concurrency queue.
-  //    enqueueAiJob is synchronous — never awaits — so this loop adds
-  //    jobs and falls through to the 200 response in a few microseconds.
-  //    Concurrency is capped (default 2 jobs / process) so a burst of
-  //    webhooks can't fan out into 50+ parallel AI calls and exhaust the
-  //    Hostinger process pool.
-  if (pendingDrafts.length > 0) {
-    const integration = matched;
-    const admin = createAdminClient();
-    for (const draft of pendingDrafts) {
-      const r = enqueueAiJob(() =>
-        processOnePending(admin, integration, draft, reqId),
-      );
-      if (r.ok) {
-        console.log(
-          `[line] [queue:ok] req=${reqId} row=${draft.rowId} active=${r.active} backlog=${r.backlog} queued=${r.queued}`,
-        );
-      } else {
-        console.warn(
-          `[line] [queue:dropped] req=${reqId} row=${draft.rowId} reason=${r.reason} active=${r.active} backlog=${r.backlog}`,
-        );
-        // Mark the row so the merchant sees that AI didn't draft this
-        // one and they need to reply manually. Fire-and-forget — do NOT
-        // await, otherwise we'd push the DB call back into the critical
-        // path under exactly the load condition we're trying to relieve.
-        void admin
-          .from("inbox_messages")
-          .update({
-            status: "needs_human",
-            send_error:
-              "AI queue overloaded — manual reply needed (auto-reply skipped under load)",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", draft.rowId)
-          .then(({ error }) => {
-            if (error) {
-              console.error(
-                `[line] [db:overload-update-fail] req=${reqId} row=${draft.rowId} error=${error.message}`,
-              );
-            }
-          });
-      }
+  const insertedById = new Map<string, string>();
+  for (const r of inserted) {
+    if (r.external_message_id) {
+      insertedById.set(r.external_message_id, r.id);
     }
   }
+
+  const pendingDrafts: PendingDraft[] = events
+    .map((event): PendingDraft | null => {
+      const extId = event.message?.id;
+      if (!extId) return null;
+      const rowId = insertedById.get(extId);
+      if (!rowId) return null;
+      return {
+        rowId,
+        storeId: integration.store_id,
+        externalUserId: event.source?.userId ?? null,
+        messageText: event.message!.text!.trim(),
+        replyToken: event.replyToken,
+      };
+    })
+    .filter((p): p is PendingDraft => p !== null);
 
   console.log(
-    `[line] [done] req=${reqId} ms=${Date.now() - startedAt} events=${textEvents.length} pending=${pendingDrafts.length}`,
+    `[line] [bg:upsert-ok] req=${reqId} inserted=${pendingDrafts.length} duplicate=${events.length - pendingDrafts.length}`,
   );
-  return NextResponse.json({ ok: true });
+
+  if (pendingDrafts.length === 0) return;
+
+  // Enqueue AI work — synchronous, never awaits. Concurrency cap (default
+  // 2/process) prevents a burst from fanning out into N parallel AI calls.
+  for (const draft of pendingDrafts) {
+    const r = enqueueAiJob(() =>
+      processOnePending(admin, integration, draft, reqId),
+    );
+    if (r.ok) {
+      console.log(
+        `[line] [queue:ok] req=${reqId} row=${draft.rowId} active=${r.active} backlog=${r.backlog} queued=${r.queued}`,
+      );
+    } else {
+      console.warn(
+        `[line] [queue:dropped] req=${reqId} row=${draft.rowId} reason=${r.reason} active=${r.active} backlog=${r.backlog}`,
+      );
+      // Mark the row so the merchant sees AI was overloaded.
+      // Fire-and-forget; this is already a background context.
+      void admin
+        .from("inbox_messages")
+        .update({
+          status: "needs_human",
+          send_error:
+            "AI queue overloaded — manual reply needed (auto-reply skipped under load)",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", draft.rowId)
+        .then(({ error }) => {
+          if (error) {
+            console.error(
+              `[line] [db:overload-update-fail] req=${reqId} row=${draft.rowId} error=${error.message}`,
+            );
+          }
+        });
+    }
+  }
 }
 
 function isProcessableTextEvent(event: LineEvent): boolean {
