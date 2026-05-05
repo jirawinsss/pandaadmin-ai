@@ -52,6 +52,7 @@ type Initial = {
   isEnabled: boolean;
   mode: string;
   intents: string[];
+  intentCounts: Record<string, number>;
   hasExisting: boolean;
 };
 
@@ -202,12 +203,14 @@ export function LineIntegrationForm({ initial }: { initial: Initial }) {
                 ประเภทข้อความที่อนุญาตให้ AI ตอบเอง
               </p>
               <p className="text-xs text-muted-foreground">
-                ถ้าไม่เลือกเลย จะไม่มี auto-reply เกิดขึ้น
+                ถ้าไม่เลือกเลย จะไม่มี auto-reply เกิดขึ้น —
+                ตัวเลขข้างชื่อ = จำนวนข้อความใน 30 วันที่ผ่านมา
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {INTENTS.map((intent) => {
                   const safety = INTENT_SAFETY[intent];
                   const checked = intents.has(intent);
+                  const count = initial.intentCounts[intent] ?? 0;
                   return (
                     <label
                       key={intent}
@@ -223,6 +226,11 @@ export function LineIntegrationForm({ initial }: { initial: Initial }) {
                         className="size-4 accent-primary"
                       />
                       <span className="flex-1">{intent}</span>
+                      {count > 0 && (
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground">
+                          {count}
+                        </span>
+                      )}
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs ${SAFETY_BADGE[safety]}`}
                       >

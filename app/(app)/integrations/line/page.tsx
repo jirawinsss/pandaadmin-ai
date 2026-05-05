@@ -18,13 +18,34 @@ export default async function LineIntegrationPage() {
   // Build the absolute webhook URL — use header host so it works in dev too
   // (Next 16 cookies/headers are async)
   const supabase = await createClient();
-  const { data: existing } = await supabase
-    .from("line_integrations")
-    .select(
-      "channel_access_token, channel_secret, is_enabled, auto_reply_mode, auto_reply_intents, updated_at",
-    )
-    .eq("store_id", ctx.store.id)
-    .maybeSingle();
+
+  // Last 30 days of intent traffic — informs which whitelist picks make sense
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const [{ data: existing }, { data: intentRows }] = await Promise.all([
+    supabase
+      .from("line_integrations")
+      .select(
+        "channel_access_token, channel_secret, is_enabled, auto_reply_mode, auto_reply_intents, updated_at",
+      )
+      .eq("store_id", ctx.store.id)
+      .maybeSingle(),
+    supabase
+      .from("inbox_messages")
+      .select("intent")
+      .eq("store_id", ctx.store.id)
+      .gte("created_at", thirtyDaysAgo.toISOString()),
+  ]);
+
+  const intentCounts = (intentRows ?? []).reduce<Record<string, number>>(
+    (acc, r) => {
+      const key = (r.intent as string | null) ?? "อื่นๆ";
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
 
   const initial = {
     tokenMasked: maskSecret(existing?.channel_access_token as string | null),
@@ -32,6 +53,7 @@ export default async function LineIntegrationPage() {
     isEnabled: Boolean(existing?.is_enabled),
     mode: (existing?.auto_reply_mode as string | null) ?? "draft",
     intents: ((existing?.auto_reply_intents as string[] | null) ?? []),
+    intentCounts,
     hasExisting: Boolean(existing),
   };
 

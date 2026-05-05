@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Bot, Inbox as InboxIcon, MessageSquare, Send } from "lucide-react";
+
 import { getCurrentContext } from "@/lib/store";
+import { createClient } from "@/lib/supabase/server";
 import { planLimits, planLabel } from "@/lib/plans";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +25,48 @@ export default async function DashboardPage() {
 
   const storeName = store.name?.trim() || "(ยังไม่ได้ตั้งชื่อร้าน)";
   const needsSetup = !store.name?.trim();
+
+  // Inbox stats — last 7 days for trend, plus the pending count which spans
+  // any age (a 2-week-old un-replied draft still matters)
+  const supabase = await createClient();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const [
+    { data: recentMsgs },
+    { count: pendingCountRaw },
+    { data: integration },
+  ] = await Promise.all([
+    supabase
+      .from("inbox_messages")
+      .select("status, auto_sent, created_at")
+      .eq("store_id", store.id)
+      .gte("created_at", sevenDaysAgo.toISOString()),
+    supabase
+      .from("inbox_messages")
+      .select("*", { count: "exact", head: true })
+      .eq("store_id", store.id)
+      .in("status", ["draft", "needs_human"]),
+    supabase
+      .from("line_integrations")
+      .select("is_enabled, auto_reply_mode")
+      .eq("store_id", store.id)
+      .maybeSingle(),
+  ]);
+
+  const recent = recentMsgs ?? [];
+  const todayMsgs = recent.filter(
+    (m) => new Date(m.created_at as string) >= todayStart,
+  );
+  const todayCount = todayMsgs.length;
+  const todayAutoSent = todayMsgs.filter((m) => m.auto_sent).length;
+  const weekCount = recent.length;
+  const pending = pendingCountRaw ?? 0;
+
+  const lineConnected = Boolean(integration?.is_enabled);
+  const inAutoSafe = integration?.auto_reply_mode === "auto_safe";
 
   return (
     <div className="flex flex-col gap-6">
@@ -53,6 +98,55 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <CardTitle>Inbox</CardTitle>
+              <CardDescription>
+                {lineConnected
+                  ? inAutoSafe
+                    ? "AI ตอบลูกค้าให้เองในโหมด auto-safe"
+                    : "AI ร่างคำตอบให้ — คุณกดคัดลอกแล้วส่งเอง"
+                  : "เชื่อมต่อ LINE OA เพื่อให้ AI ดูแลข้อความให้"}
+              </CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link href={lineConnected ? "/inbox" : "/integrations/line"}>
+                {lineConnected ? "ดู Inbox →" : "เชื่อมต่อ LINE →"}
+              </Link>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Stat
+              icon={<MessageSquare className="size-4" />}
+              label="ข้อความวันนี้"
+              value={todayCount}
+            />
+            <Stat
+              icon={<Bot className="size-4" />}
+              label="AI ตอบให้วันนี้"
+              value={todayAutoSent}
+              tone="primary"
+            />
+            <Stat
+              icon={<InboxIcon className="size-4" />}
+              label="รอตอบ"
+              value={pending}
+              tone={pending > 0 ? "warning" : "default"}
+            />
+            <Stat
+              icon={<Send className="size-4" />}
+              label="7 วันรวม"
+              value={weekCount}
+              tone="muted"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
@@ -101,6 +195,48 @@ export default async function DashboardPage() {
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Stat({
+  icon,
+  label,
+  value,
+  tone = "default",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone?: "default" | "primary" | "warning" | "muted";
+}) {
+  const valueClass =
+    tone === "primary"
+      ? "text-primary"
+      : tone === "warning"
+        ? "text-amber-600 dark:text-amber-400"
+        : tone === "muted"
+          ? "text-muted-foreground"
+          : "";
+  const iconClass =
+    tone === "primary"
+      ? "bg-primary/10 text-primary"
+      : tone === "warning"
+        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+        : "bg-muted text-muted-foreground";
+  return (
+    <div className="rounded-lg border bg-card p-3">
+      <div className="flex items-center gap-2">
+        <span
+          className={`inline-flex size-6 items-center justify-center rounded ${iconClass}`}
+        >
+          {icon}
+        </span>
+        <p className="text-xs text-muted-foreground">{label}</p>
+      </div>
+      <p className={`mt-2 font-heading text-2xl font-semibold ${valueClass}`}>
+        {value}
+      </p>
     </div>
   );
 }
