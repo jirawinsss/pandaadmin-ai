@@ -304,23 +304,34 @@ async function persistAndDispatch(
         `[line] [queue:dropped] req=${reqId} row=${draft.rowId} reason=${r.reason} active=${r.active} backlog=${r.backlog}`,
       );
       // Mark the row so the merchant sees AI was overloaded.
-      // Fire-and-forget; this is already a background context.
-      void admin
-        .from("inbox_messages")
-        .update({
-          status: "needs_human",
-          send_error:
-            "AI queue overloaded — manual reply needed (auto-reply skipped under load)",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", draft.rowId)
-        .then(({ error }) => {
+      // Fire-and-forget. async IIFE wraps the call so we can try/catch
+      // — Supabase builders are PromiseLike (no .catch method), so a
+      // raw .then() chain has no way to handle a thrown rejection.
+      // Without this, an SDK abort/reject would surface as
+      // unhandledRejection.
+      void (async () => {
+        try {
+          const { error } = await admin
+            .from("inbox_messages")
+            .update({
+              status: "needs_human",
+              send_error:
+                "AI queue overloaded — manual reply needed (auto-reply skipped under load)",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", draft.rowId);
           if (error) {
             console.error(
               `[line] [db:overload-update-fail] req=${reqId} row=${draft.rowId} error=${error.message}`,
             );
           }
-        });
+        } catch (e) {
+          console.error(
+            `[line] [db:overload-update-throw] req=${reqId} row=${draft.rowId}`,
+            e,
+          );
+        }
+      })();
     }
   }
 }
