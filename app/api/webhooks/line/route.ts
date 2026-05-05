@@ -8,6 +8,7 @@ import {
 } from "@/lib/inbox-draft";
 import { lineReplyText } from "@/lib/line-send";
 import { consumeBucket, getClientIp } from "@/lib/ratelimit";
+import { withTimeout } from "@/lib/timeout";
 
 // Force Node runtime — we use crypto + the Anthropic SDK
 export const runtime = "nodejs";
@@ -106,12 +107,16 @@ export async function POST(req: NextRequest) {
   let matched: LineIntegrationRow | null = null;
   try {
     const admin = createAdminClient();
-    const { data: integrationsRaw, error: listErr } = await admin
-      .from("line_integrations")
-      .select(
-        "id, store_id, channel_secret, channel_access_token, is_enabled, auto_reply_mode, auto_reply_intents",
-      )
-      .eq("is_enabled", true);
+    const { data: integrationsRaw, error: listErr } = await withTimeout(
+      admin
+        .from("line_integrations")
+        .select(
+          "id, store_id, channel_secret, channel_access_token, is_enabled, auto_reply_mode, auto_reply_intents",
+        )
+        .eq("is_enabled", true),
+      5_000,
+      "list integrations",
+    );
 
     if (listErr) {
       console.error(
@@ -195,13 +200,17 @@ export async function POST(req: NextRequest) {
       raw_event: event,
     }));
 
-    const { data, error } = await admin
-      .from("inbox_messages")
-      .upsert(insertRows, {
-        onConflict: "store_id,platform,external_message_id",
-        ignoreDuplicates: true,
-      })
-      .select("id, external_message_id");
+    const { data, error } = await withTimeout(
+      admin
+        .from("inbox_messages")
+        .upsert(insertRows, {
+          onConflict: "store_id,platform,external_message_id",
+          ignoreDuplicates: true,
+        })
+        .select("id, external_message_id"),
+      5_000,
+      "inbox_messages upsert",
+    );
 
     if (error) {
       console.error(
