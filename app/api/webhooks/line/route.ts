@@ -10,21 +10,19 @@ import { lineReplyText } from "@/lib/line-send";
 import { consumeBucket, getClientIp } from "@/lib/ratelimit";
 import { withTimeout } from "@/lib/timeout";
 import { enqueueAiJob } from "@/lib/ai-queue";
+import {
+  getEnabledIntegrationsCached,
+  type CachedIntegration,
+} from "@/lib/line-integration-cache";
 
 // Force Node runtime — we use crypto + the Anthropic SDK
 export const runtime = "nodejs";
 // Disable any caching
 export const dynamic = "force-dynamic";
 
-type LineIntegrationRow = {
-  id: string;
-  store_id: string;
-  channel_secret: string;
-  channel_access_token: string;
-  is_enabled: boolean;
-  auto_reply_mode: string;
-  auto_reply_intents: string[] | null;
-};
+// Re-exported from the cache module so the rest of this file can keep its
+// existing types unchanged.
+type LineIntegrationRow = CachedIntegration;
 
 type LineEvent = {
   type: string;
@@ -104,30 +102,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3. Find matching integration via HMAC verify
+  // 3. Find matching integration via HMAC verify.
+  //    Integration list is cached in memory (30s TTL) so a burst of
+  //    concurrent webhooks doesn't stack 80–200ms Supabase round-trips.
+  //    Cache invalidates on config change from the integrations action.
   let matched: LineIntegrationRow | null = null;
   try {
     const admin = createAdminClient();
-    const { data: integrationsRaw, error: listErr } = await withTimeout(
-      admin
-        .from("line_integrations")
-        .select(
-          "id, store_id, channel_secret, channel_access_token, is_enabled, auto_reply_mode, auto_reply_intents",
-        )
-        .eq("is_enabled", true),
-      5_000,
-      "list integrations",
-    );
-
-    if (listErr) {
-      console.error(
-        `[line] [db:list-fail] req=${reqId} error=${listErr.message}`,
+    const integrations = await getEnabledIntegrationsCached(async () => {
+      const { data, error } = await withTimeout(
+        admin
+          .from("line_integrations")
+          .select(
+            "id, store_id, channel_secret, channel_access_token, is_enabled, auto_reply_mode, auto_reply_intents",
+          )
+          .eq("is_enabled", true),
+        5_000,
+        "list integrations",
       );
-      // 200 so LINE doesn't retry — we'll catch this on our end via logs
-      return NextResponse.json({ ok: true });
-    }
+      if (error) {
+        console.error(
+          `[line] [db:list-fail] req=${reqId} error=${error.message}`,
+        );
+        throw new Error(error.message);
+      }
+      return (data ?? []) as LineIntegrationRow[];
+    });
 
-    const integrations = (integrationsRaw ?? []) as LineIntegrationRow[];
     if (integrations.length === 0) {
       return NextResponse.json({ ok: true });
     }

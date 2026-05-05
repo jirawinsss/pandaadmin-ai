@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getQueueStats } from "@/lib/ai-queue";
+import { getCacheStats } from "@/lib/line-integration-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,5 +35,6 @@ export async function GET() {
       supabase_service: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
     ai_queue: getQueueStats(),
+    integration_cache: getCacheStats(),
   });
 }

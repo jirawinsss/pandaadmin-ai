@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentContext } from "@/lib/store";
 import { INTENTS } from "@/app/(app)/reply/types";
+import { invalidateIntegrationsCache } from "@/lib/line-integration-cache";
 
 export type LineConfigResult = { ok: true } | { ok: false; error: string };
 
@@ -84,6 +85,11 @@ export async function saveLineIntegrationAction(
     });
     if (error) return { ok: false, error: `บันทึกไม่สำเร็จ: ${error.message}` };
   }
+
+  // Invalidate the in-memory integration cache used by the webhook so
+  // the toggle / mode / whitelist changes take effect on the very next
+  // webhook (otherwise the cache TTL would delay it up to 30s).
+  invalidateIntegrationsCache();
 
   revalidatePath("/integrations/line");
   return { ok: true };
