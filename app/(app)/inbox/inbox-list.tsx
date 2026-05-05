@@ -4,11 +4,11 @@ import { useState, useTransition } from "react";
 import {
   AlertTriangle,
   Bot,
-  Check,
   Copy,
   EyeOff,
   Send,
   TriangleAlert,
+  User,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -68,12 +68,93 @@ function formatTime(iso: string): string {
   });
 }
 
+type Thread = {
+  id: string;
+  externalUserId: string | null;
+  messages: InboxRow[]; // chronological — oldest first
+  latestAt: number;
+};
+
+/**
+ * Group rows by external_user_id so messages from the same LINE customer
+ * cluster together. Messages without a userId stay as one-row threads.
+ * Within a thread, messages are ordered chronologically (oldest first) so
+ * the merchant reads top-to-bottom like a chat. Threads themselves are
+ * sorted by their latest message — newest activity at the top.
+ */
+function groupIntoThreads(rows: InboxRow[]): Thread[] {
+  const map = new Map<string, InboxRow[]>();
+  const standalone: InboxRow[] = [];
+
+  for (const r of rows) {
+    if (!r.external_user_id) {
+      standalone.push(r);
+      continue;
+    }
+    const list = map.get(r.external_user_id) ?? [];
+    list.push(r);
+    map.set(r.external_user_id, list);
+  }
+
+  const threads: Thread[] = [];
+  for (const [userId, msgs] of map) {
+    msgs.sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    threads.push({
+      id: userId,
+      externalUserId: userId,
+      messages: msgs,
+      latestAt: new Date(msgs[msgs.length - 1].created_at).getTime(),
+    });
+  }
+  for (const r of standalone) {
+    threads.push({
+      id: r.id,
+      externalUserId: null,
+      messages: [r],
+      latestAt: new Date(r.created_at).getTime(),
+    });
+  }
+  threads.sort((a, b) => b.latestAt - a.latestAt);
+  return threads;
+}
+
 export function InboxList({ rows }: { rows: InboxRow[] }) {
+  const threads = groupIntoThreads(rows);
   return (
-    <div className="flex flex-col gap-4">
-      {rows.map((row) => (
-        <InboxCard key={row.id} row={row} />
+    <div className="flex flex-col gap-6">
+      {threads.map((thread) => (
+        <ThreadGroup key={thread.id} thread={thread} />
       ))}
+    </div>
+  );
+}
+
+function ThreadGroup({ thread }: { thread: Thread }) {
+  // Single-message threads render as a plain card — no header, no rail
+  if (thread.messages.length === 1) {
+    return <InboxCard row={thread.messages[0]} />;
+  }
+
+  const userTag = thread.externalUserId
+    ? thread.externalUserId.slice(0, 12) + "…"
+    : "ไม่ระบุ";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+        <User className="size-3.5" />
+        <span className="font-medium">{userTag}</span>
+        <span>·</span>
+        <span>{thread.messages.length} ข้อความ</span>
+      </div>
+      <div className="flex flex-col gap-3 border-l-2 border-muted pl-3 sm:pl-4">
+        {thread.messages.map((row) => (
+          <InboxCard key={row.id} row={row} />
+        ))}
+      </div>
     </div>
   );
 }

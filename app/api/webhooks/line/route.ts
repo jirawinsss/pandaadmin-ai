@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyLineSignature } from "@/lib/line";
-import { generateInboxDraft, type InboxDraft } from "@/lib/inbox-draft";
+import {
+  generateInboxDraft,
+  type ConversationTurn,
+  type InboxDraft,
+} from "@/lib/inbox-draft";
 import { lineReplyText } from "@/lib/line-send";
 import { consumeBucket, getClientIp } from "@/lib/ratelimit";
 
@@ -145,9 +149,17 @@ async function handleLineEvent(
   const externalUserId = event.source?.userId ?? null;
   const externalMessageId = event.message.id ?? null;
 
+  // Build conversation context if this user has a userId we can group on.
+  // Anonymous events (no source.userId) get no history — fine, just degrades
+  // to single-message drafting like before.
+  const priorTurns = externalUserId
+    ? await loadPriorTurns(admin, integration.store_id, externalUserId)
+    : [];
+
   const draft = await generateInboxDraft({
     storeId: integration.store_id,
     customerMessage: messageText,
+    priorTurns,
   });
 
   const initialStatus =
@@ -221,6 +233,40 @@ async function handleLineEvent(
       })
       .eq("id", rowId);
   }
+}
+
+/**
+ * Pull recent customer messages + sent merchant replies for the same LINE
+ * user, so the AI knows what's already been said. Drafts that weren't sent
+ * are excluded — the merchant may have rejected/edited them, so treating
+ * them as "what the shop said" would mislead the model.
+ */
+async function loadPriorTurns(
+  admin: ReturnType<typeof createAdminClient>,
+  storeId: string,
+  externalUserId: string,
+): Promise<ConversationTurn[]> {
+  const { data: rows } = await admin
+    .from("inbox_messages")
+    .select("message_text, ai_draft, status, created_at")
+    .eq("store_id", storeId)
+    .eq("external_user_id", externalUserId)
+    .order("created_at", { ascending: true })
+    .limit(20);
+
+  const turns: ConversationTurn[] = [];
+  for (const r of (rows ?? []) as Array<{
+    message_text: string;
+    ai_draft: string | null;
+    status: string;
+  }>) {
+    turns.push({ role: "customer", text: r.message_text });
+    // Only include the AI draft if we know the merchant actually used it
+    if (r.ai_draft && (r.status === "sent" || r.status === "copied")) {
+      turns.push({ role: "merchant", text: r.ai_draft });
+    }
+  }
+  return turns;
 }
 
 /**
