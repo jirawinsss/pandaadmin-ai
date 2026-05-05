@@ -6,6 +6,7 @@ import {
   Bot,
   Copy,
   EyeOff,
+  Loader2,
   Send,
   TriangleAlert,
   User,
@@ -164,6 +165,12 @@ function InboxCard({ row }: { row: InboxRow }) {
   const [status, setStatus] = useState(row.status);
   const [pending, startTransition] = useTransition();
   const isHandoff = status === "needs_human" || row.risk_level === "high";
+  // ai_draft is filled in by the background task after the webhook returns
+  // 200, so for the first ~5–10s after a customer sends a message the row
+  // has an empty draft. Show a "still drafting" placeholder instead of an
+  // empty textarea so the merchant doesn't think AI is broken.
+  const isDraftPending =
+    !row.ai_draft.trim() && (status === "draft" || status === "needs_human");
 
   function update(patch: { status?: string; ai_draft?: string }) {
     startTransition(async () => {
@@ -276,49 +283,63 @@ function InboxCard({ row }: { row: InboxRow }) {
           </div>
         )}
 
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            AI draft (แก้ได้ก่อนคัดลอก)
-          </p>
-          <Textarea
-            rows={4}
-            value={draft}
-            disabled={pending}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-        </div>
+        {isDraftPending ? (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed bg-muted/30 p-4 text-sm">
+            <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+            <div className="flex flex-col gap-1">
+              <p className="font-medium">AI กำลังร่างคำตอบ…</p>
+              <p className="text-xs text-muted-foreground">
+                ปกติเสร็จใน 5–10 วินาที — รีเฟรชหน้าอีกครั้ง
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                AI draft (แก้ได้ก่อนคัดลอก)
+              </p>
+              <Textarea
+                rows={4}
+                value={draft}
+                disabled={pending}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+            </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={onCopy} disabled={pending || !draft.trim()}>
-            <Copy />
-            คัดลอก
-          </Button>
-          {draft !== row.ai_draft && (
-            <Button
-              variant="outline"
-              onClick={onSaveDraft}
-              disabled={pending}
-            >
-              บันทึก draft
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={onMarkSent}
-            disabled={pending || status === "sent"}
-          >
-            <Send />
-            ส่งแล้ว
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={onIgnore}
-            disabled={pending || status === "ignored"}
-          >
-            <EyeOff />
-            ข้าม
-          </Button>
-        </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={onCopy} disabled={pending || !draft.trim()}>
+                <Copy />
+                คัดลอก
+              </Button>
+              {draft !== row.ai_draft && (
+                <Button
+                  variant="outline"
+                  onClick={onSaveDraft}
+                  disabled={pending}
+                >
+                  บันทึก draft
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={onMarkSent}
+                disabled={pending || status === "sent"}
+              >
+                <Send />
+                ส่งแล้ว
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={onIgnore}
+                disabled={pending || status === "ignored"}
+              >
+                <EyeOff />
+                ข้าม
+              </Button>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
