@@ -1,11 +1,14 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Anthropic from "@anthropic-ai/sdk";
 import { getAnthropic, REPLY_MODEL } from "@/lib/anthropic";
+import { consumeBucket, getClientIp } from "@/lib/ratelimit";
 
 const COOKIE_NAME = "demo_count";
 const MAX_DEMOS_PER_BROWSER = 2;
+// Per-IP cap on top of the cookie limit — stops bots from rotating cookies
+const MAX_DEMOS_PER_IP_PER_HOUR = 5;
 
 // Hardcoded sample shop — same shape as buildStoreSystemPrompt would produce
 // but baked at module load so prompt caching kicks in across all visitors.
@@ -63,6 +66,14 @@ export async function tryDemoAction(
   if (!message) return { ok: false, error: "กรุณาพิมพ์ข้อความลูกค้า" };
   if (message.length > 500)
     return { ok: false, error: "ข้อความยาวเกินไป (เกิน 500 ตัวอักษร)" };
+
+  const ip = getClientIp(await headers());
+  if (!consumeBucket(`demo:${ip}`, MAX_DEMOS_PER_IP_PER_HOUR, 60 * 60 * 1000)) {
+    return {
+      ok: false,
+      error: "เรียกบ่อยเกินไป — ลองใหม่อีก 1 ชั่วโมง",
+    };
+  }
 
   const cookieStore = await cookies();
   const used = parseInt(cookieStore.get(COOKIE_NAME)?.value ?? "0", 10) || 0;

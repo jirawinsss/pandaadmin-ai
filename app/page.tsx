@@ -9,11 +9,16 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PLAN_LIMITS } from "@/lib/plans";
 import { TryDemo } from "./_components/try-demo";
+
+// Static — no Request-time APIs. Bots hitting / no longer trigger a Supabase
+// auth round-trip per visit. Logged-in users who click "เข้าสู่ระบบ" are
+// redirected to /dashboard by the proxy anyway, so we don't need to branch
+// the UI at render time.
+export const revalidate = 3600;
 
 const PRICING = [
   {
@@ -45,13 +50,7 @@ const PRICING = [
   },
 ];
 
-export default async function Home() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const isLoggedIn = !!user;
-
+export default function Home() {
   return (
     <div className="flex flex-1 flex-col">
       {/* Sticky top bar with backdrop blur */}
@@ -65,20 +64,12 @@ export default async function Home() {
           </Link>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            {isLoggedIn ? (
-              <Button asChild size="sm">
-                <Link href="/dashboard">เข้า Dashboard</Link>
-              </Button>
-            ) : (
-              <>
-                <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
-                  <Link href="/login">เข้าสู่ระบบ</Link>
-                </Button>
-                <Button asChild size="sm">
-                  <Link href="/register">เริ่มใช้ฟรี</Link>
-                </Button>
-              </>
-            )}
+            <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+              <Link href="/login">เข้าสู่ระบบ</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/register">เริ่มใช้ฟรี</Link>
+            </Button>
           </div>
         </div>
       </header>
@@ -111,24 +102,14 @@ export default async function Home() {
               แล้วช่วยตอบลูกค้าและสร้างโพสต์ในแบบของคุณเอง
             </p>
             <div className="flex flex-col gap-3 sm:flex-row">
-              {isLoggedIn ? (
-                <Button asChild size="lg">
-                  <Link href="/dashboard">
-                    เข้า Dashboard <ArrowRight />
-                  </Link>
-                </Button>
-              ) : (
-                <>
-                  <Button asChild size="lg">
-                    <Link href="/register">
-                      เริ่มใช้ฟรี <ArrowRight />
-                    </Link>
-                  </Button>
-                  <Button asChild size="lg" variant="outline">
-                    <Link href="#pricing">ดูแพ็กเกจ</Link>
-                  </Button>
-                </>
-              )}
+              <Button asChild size="lg">
+                <Link href="/register">
+                  เริ่มใช้ฟรี <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link href="#pricing">ดูแพ็กเกจ</Link>
+              </Button>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
@@ -286,7 +267,7 @@ export default async function Home() {
             </p>
           </div>
           <div className="mt-12">
-            <TryDemo isLoggedIn={isLoggedIn} />
+            <TryDemo />
           </div>
         </div>
       </section>
@@ -349,11 +330,7 @@ export default async function Home() {
           </div>
           <div className="mt-12 grid gap-6 md:grid-cols-3">
             {PRICING.map((tier) => (
-              <PricingCard
-                key={tier.plan}
-                tier={tier}
-                isLoggedIn={isLoggedIn}
-              />
+              <PricingCard key={tier.plan} tier={tier} />
             ))}
           </div>
           <p className="mt-10 text-center text-xs text-muted-foreground">
@@ -376,19 +353,11 @@ export default async function Home() {
           <p className="text-lg text-muted-foreground">
             ทดลองฟรี 10 reply + 5 โพสต์ ไม่ต้องใช้บัตรเครดิต
           </p>
-          {isLoggedIn ? (
-            <Button asChild size="lg">
-              <Link href="/dashboard">
-                เข้า Dashboard <ArrowRight />
-              </Link>
-            </Button>
-          ) : (
-            <Button asChild size="lg">
-              <Link href="/register">
-                เริ่มใช้ฟรี <ArrowRight />
-              </Link>
-            </Button>
-          )}
+          <Button asChild size="lg">
+            <Link href="/register">
+              เริ่มใช้ฟรี <ArrowRight />
+            </Link>
+          </Button>
         </div>
       </section>
 
@@ -477,13 +446,7 @@ function StepCard({
   );
 }
 
-function PricingCard({
-  tier,
-  isLoggedIn,
-}: {
-  tier: (typeof PRICING)[number];
-  isLoggedIn: boolean;
-}) {
+function PricingCard({ tier }: { tier: (typeof PRICING)[number] }) {
   const limits = PLAN_LIMITS[tier.plan];
   return (
     <div
@@ -531,7 +494,7 @@ function PricingCard({
         size="lg"
         className="w-full"
       >
-        <Link href={isLoggedIn ? "/dashboard" : "/register"}>{tier.cta}</Link>
+        <Link href="/register">{tier.cta}</Link>
       </Button>
     </div>
   );

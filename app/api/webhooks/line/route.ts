@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyLineSignature } from "@/lib/line";
 import { generateInboxDraft, type InboxDraft } from "@/lib/inbox-draft";
 import { lineReplyText } from "@/lib/line-send";
+import { consumeBucket, getClientIp } from "@/lib/ratelimit";
 
 // Force Node runtime — we use crypto + the Anthropic SDK
 export const runtime = "nodejs";
@@ -30,20 +31,28 @@ type LineEvent = {
 /**
  * POST /api/webhooks/line
  *
- * Receive a LINE webhook, verify HMAC signature against ANY enabled
- * integration's channel_secret, then for each text message event generate
- * an AI draft and persist it as an inbox_messages row in 'draft' status
- * (or 'needs_human' if the AI flags it as risky).
+ * Verifies HMAC against any enabled integration's channel_secret, then
+ * SCHEDULES per-event AI drafting + auto-reply via `after()` so the response
+ * returns to LINE in <100ms regardless of event count or AI latency. Without
+ * this, a slow Anthropic call would tie up the Node process for 5–15s per
+ * event, exhausting Hostinger / Phusion Passenger workers under load.
  *
- * Always returns 200 once we've identified the integration so LINE doesn't
- * retry. Per-event errors are logged but swallowed.
+ * Always returns 200 once the integration is identified so LINE doesn't
+ * retry. Per-event errors are logged inside `after()` and swallowed.
  *
- * TODO: when we have many integrations, replace try-each-secret routing
- * with per-store webhook URLs (`/api/webhooks/line/[store_id]`) — store_id
- * is in `event.source` for some event types but not consistently, so the
- * cleaner fix is a unique URL per store.
+ * Rate limit: 600 req/min per IP. LINE servers share IPs across stores —
+ * generous limit prevents abuse without blocking legitimate traffic.
  */
 export async function POST(req: NextRequest) {
+  // Rate limit by IP — generous because LINE servers are shared
+  const ip = getClientIp(req.headers);
+  if (!consumeBucket(`webhook:line:${ip}`, 600, 60_000)) {
+    return NextResponse.json(
+      { ok: false, error: "rate limited" },
+      { status: 429, headers: { "retry-after": "60" } },
+    );
+  }
+
   // Read raw body BEFORE any parsing — required for signature verification
   const rawBody = await req.text();
   const signature = req.headers.get("x-line-signature");
@@ -72,7 +81,6 @@ export async function POST(req: NextRequest) {
 
   const integrations = (integrationsRaw ?? []) as LineIntegrationRow[];
   if (integrations.length === 0) {
-    // No active integrations — accept and move on
     return NextResponse.json({ ok: true });
   }
 
@@ -85,19 +93,17 @@ export async function POST(req: NextRequest) {
   }
 
   if (!matched) {
-    // Signature didn't match any active integration.
     return NextResponse.json(
       { ok: false, error: "invalid signature" },
       { status: 401 },
     );
   }
 
-  // If the merchant chose 'off', acknowledge but do nothing
   if (matched.auto_reply_mode === "off") {
     return NextResponse.json({ ok: true });
   }
 
-  // Parse events
+  // Parse events synchronously (cheap)
   let parsed: { events?: LineEvent[] };
   try {
     parsed = JSON.parse(rawBody);
@@ -106,13 +112,20 @@ export async function POST(req: NextRequest) {
   }
   const events = parsed.events ?? [];
 
-  // Process each event independently. Don't let one error tank the rest.
-  for (const event of events) {
-    try {
-      await handleLineEvent(admin, matched, event);
-    } catch (e) {
-      console.error("[line webhook] event error:", e);
-    }
+  if (events.length > 0) {
+    // Schedule AI drafting + DB upsert + auto-reply AFTER the response.
+    // Captured `admin` and `matched` are safe to hold across the response —
+    // admin is a cached singleton, matched is a plain object.
+    const integration = matched;
+    after(async () => {
+      for (const event of events) {
+        try {
+          await handleLineEvent(admin, integration, event);
+        } catch (e) {
+          console.error("[line webhook] event error:", e);
+        }
+      }
+    });
   }
 
   return NextResponse.json({ ok: true });
@@ -142,10 +155,10 @@ async function handleLineEvent(
       ? "needs_human"
       : "draft";
 
-  // Idempotent insert — unique index on (store_id, platform, external_message_id)
-  // means duplicates from LINE retries become no-ops. .select() returns the
-  // inserted row OR an empty array if it was a duplicate — we use that to
-  // skip auto-reply on retries (the original replyToken would be expired).
+  // Idempotent insert — unique constraint on (store_id, platform,
+  // external_message_id). .select() returns the inserted row OR an empty
+  // array if it was a duplicate — we use that to skip auto-reply on retries
+  // (the original replyToken would already be expired).
   const { data: insertedRows, error } = await admin
     .from("inbox_messages")
     .upsert(
@@ -174,10 +187,8 @@ async function handleLineEvent(
   }
 
   const rowId = insertedRows?.[0]?.id;
-  // Duplicate (retry) — original event already handled, skip auto-reply
-  if (!rowId) return;
+  if (!rowId) return; // duplicate — already handled
 
-  // Auto-reply gate
   if (!shouldAutoReply(integration, draft)) return;
 
   const replyToken = event.replyToken;
@@ -214,7 +225,6 @@ async function handleLineEvent(
 
 /**
  * Hard gate for auto-reply. Every condition must pass — fail-closed by design.
- * Risky drafts always fall back to draft mode regardless of merchant config.
  */
 function shouldAutoReply(
   integration: LineIntegrationRow,

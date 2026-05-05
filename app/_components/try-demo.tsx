@@ -15,7 +15,7 @@ const SAMPLES = [
   "วิตามินซีเซรั่ม สั่ง 2 ขวดได้ลดเท่าไหร่คะ?",
 ];
 
-export function TryDemo({ isLoggedIn }: { isLoggedIn: boolean }) {
+export function TryDemo() {
   const [customerMsg, setCustomerMsg] = useState("");
   const [reply, setReply] = useState("");
   const [quotaReached, setQuotaReached] = useState(false);
@@ -129,8 +129,8 @@ export function TryDemo({ isLoggedIn }: { isLoggedIn: boolean }) {
               </span>
             </p>
             <Button asChild size="lg">
-              <Link href={isLoggedIn ? "/dashboard" : "/register"}>
-                {isLoggedIn ? "เข้า Dashboard" : "เริ่มใช้ฟรี"} <ArrowRight />
+              <Link href="/register">
+                เริ่มใช้ฟรี <ArrowRight />
               </Link>
             </Button>
           </div>

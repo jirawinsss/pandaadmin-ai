@@ -6,8 +6,12 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Run on every path except static assets and image optimisation.
+  // Skip:
+  //   - /api/* — route handlers manage their own auth/rate limit; webhook
+  //     needs the lowest possible latency
+  //   - _next internals + static assets
+  //   - icon / favicon / robots / sitemap (return 200 from public/ or app/)
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!api/|_next/static|_next/image|favicon\\.ico|icon\\.(?:svg|png|ico)|robots\\.txt|sitemap\\.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|txt)$).*)",
   ],
 };
