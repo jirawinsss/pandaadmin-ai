@@ -5,13 +5,32 @@ export async function proxy(request: NextRequest) {
   return updateSession(request);
 }
 
+// EXPLICIT whitelist — proxy only runs on paths that genuinely need auth
+// or auth-redirect logic. Everything else (homepage, /api/*, static assets,
+// bot-probe paths like /wp-admin) skips proxy entirely so:
+//   - LiteSpeed can serve static / from cache without invoking Node middleware
+//   - LINE webhook hits zero proxy overhead
+//   - Bot scans of random paths fall straight to Next's static _not-found
+//     instead of running our rate-limit / bot-deny / Supabase session code
 export const config = {
-  // Skip:
-  //   - /api/* — route handlers manage their own auth/rate limit; webhook
-  //     needs the lowest possible latency
-  //   - _next internals + static assets
-  //   - icon / favicon / robots / sitemap (return 200 from public/ or app/)
   matcher: [
-    "/((?!api/|_next/static|_next/image|favicon\\.ico|icon\\.(?:svg|png|ico)|robots\\.txt|sitemap\\.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|txt)$).*)",
+    "/dashboard/:path*",
+    "/dashboard",
+    "/brain/:path*",
+    "/brain",
+    "/reply/:path*",
+    "/reply",
+    "/post/:path*",
+    "/post",
+    "/inbox/:path*",
+    "/inbox",
+    "/integrations/:path*",
+    "/integrations",
+    "/settings/:path*",
+    "/settings",
+    "/admin/:path*",
+    "/admin",
+    "/login",
+    "/register",
   ],
 };
